@@ -28,9 +28,9 @@ tidymodels_prefer()
 
 source('./Final/0-Common_data.R')
 
-# Load pre-split data -----
+# Load data -----
 
-#Load up our pre-split data so we can focus on the training data only
+#Load up our data
 d <- 
   read_rds(paste(data_dir,"alspac_data_final.rds",sep = '//'))
 
@@ -92,25 +92,39 @@ d_corr_pairs |>
   summarise(mu = mean(adj.r.squared),
             sig = sd(adj.r.squared))
 
+#Mean is 9.7% and SD is 9.1%
+
+d_0 |>
+  select(IL6_F9,IL6_F24) |>
+  mutate(across(IL6_F9:IL6_F24,
+                ~case_when( . < 0 ~ NA_integer_ ,
+                            TRUE ~ .))) |>
+  drop_na(IL6_F24)
+
+#1829 had IL6 measured at both time-points
+#2999 measurements at F9
+#3019 measurements at F24
+
+
+
 # MI with mice ------ 
 
-# Mice gives you multiple datasets though which is ok for normal stats but 
-#Im not so sure about ML- although of course if you nest the MICE inside CV
-#loops then thats fine. You can also use the ignore argument with test and
-#train data which makes it compatible with ML and thats a winner really
-
+# Mice gives you multiple datasets to apply Rubin's rules to
 
 ## MI prep  ------
 
 d_mi <- 
   d |>
-  select(-c(id,eth,smfq_25,
+  select(-c(id,eth,smfq_25,ph_type,
             starts_with("smfq_c"),
             starts_with("ad_"),
             atypical,psychological,somatic,anxiety))
 
 #We are removing ethnicity since we are not using it as a variable and nor do 
 #we want to either impute it or using it in imputation.
+
+#We are going to remove the ph_type variable as it is so closely linked to the ph
+#variable
 
 #We are going to make sure we remove all the future variables too, and we are 
 #going to remove the derived symptom scores as they are not going to be useful
@@ -120,13 +134,13 @@ d_mi|>
   visdat::vis_miss(warn_large_data = FALSE) +
   theme(axis.text.x.top = element_text(angle = 90,size = 6))
 
-#28.5% missingness overall
+#28.3% missingness overall
 
 ## MI with RFs ------
 
 #Run mice with RFs - there are some theoretical reasons to prefer this, plus
 #it can cope with categorical data, which we need. The combination of 50 
-#imputations and 20 iterations e.g. 1000 runs, means this takes a VERY long time
+#imputations and 20 iterations e.g. 1000 runs, means this takes a VERY long time -
 #like a day. Adjust your expectations according. We use 50 imputations on the 
 #heuristic than you need the same number of imputations as you have % missing 
 #data, which for us varies up to 50% (that was the cut off we used to include
@@ -148,7 +162,7 @@ densityplot(imputed.datasets.rf, ~ il6_f24| .imp,groups = cisr_dep)
 ## Save MICED RF data -----
 
 ## Save miced-data using RFs
-write_rds(imputed.datasets.rf, paste(data_dir,"alspac_data_imputed.rds",sep = '/'))
+#write_rds(imputed.datasets.rf, paste(data_dir,"alspac_data_imputed.rds",sep = '/'))
 write_rds(imputed.datasets.rf, "./Models/alspac_data_imputed.rds")
 
 # Use the MI data =======
@@ -159,7 +173,7 @@ write_rds(imputed.datasets.rf, "./Models/alspac_data_imputed.rds")
 
 #Simple model applied to the f24 blood variables
 mice.models.u <- 
-  with(imputed.datasets.rf, glm(formula = cisr_dep ~ il6_f24 *(sex + bmi24 + audit_c + smk24), 
+  with(imputed.datasets.rf, glm(formula = cisr_dep ~ il6_f24 *(sex + bmi24 + audit_c + smk24 + ph), 
                  family = binomial(link = 'logit')))
 
 howManyImputations::how_many_imputations(mice.models.u)

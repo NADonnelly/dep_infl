@@ -21,9 +21,9 @@ rm(list = c("wdn","valid_vars_f24","valid_vars_f9","v_0"))
 
 # Data Preparation ------
 
-## CISR Data ======
+## F24 Psychiatric Data ======
 
-### CISR Diagnosis -----
+### ICD 10 Diagnosis -----
 
 #CISR diagnostic data
 d_cisr = 
@@ -40,23 +40,22 @@ d_cisr =
             cisr_dep_mod = FKDQ1010,
             cisr_dep_sev = FKDQ1020) 
 
-### CISR Subscales ------
+### Symptom Scores ------
 
-#Build the CISR subscale scoes
+#Build the CISR subscale scores
 d_cisr_scales = 
   d_0 |> 
-  select(alnqlet,starts_with("FKDQ")) |> 
+  select(alnqlet,starts_with("FKDQ"),starts_with("FKPE")) |> 
   rename(id  = alnqlet) |>
   
   #Get rid of missing data on the basis that if you have a depression diagnosis
   #you must have completed the CISR
   filter(FKDQ1000 >=0) |>
   
-  select(id, FKDQ2000:FKDQ7000) |>
-  
+  select(c(id, FKDQ2000:FKDQ7000,starts_with("FKPE"))) |>
   transmute(id,
             
-            #Somatic symptom score
+            #Aches + Pains symptom score
             
             #Somatic symptom 1
             som1 = if_else(FKDQ2620 == 3,1,0) + if_else(FKDQ2720 == 3,1,0),
@@ -75,7 +74,7 @@ d_cisr_scales =
             som4 = if_else(som4 > 0,1,0),  
             
             #Total Somatic symptom score
-            som = som1+som2+som3+som4,
+            ach = som1+som2+som3+som4,
             
             
             #Fatigue symptom score
@@ -118,14 +117,15 @@ d_cisr_scales =
             con = con1+con2+con3+con4,
             
             
-            #Sleep problems score
+            #Sleep problems score overall
             
             #To get this onto a 0-4 scale, we will unite the hypersomnia
             #and insomnia items, rather than treating them separately
             
             
             #Sleep symptom 1: nights out of past 7 with problems with sleep
-            slp1 = if_else(FKDQ4010 == 3,1,0), 
+            slp1 = if_else(FKDQ4010 == 3,1,0) + if_else(FKDQ4110 == 3,1,0),
+            slp1 = if_else(slp1 > 0,1,0),
             
             
             #Sleep symptom 2: nights/7 with either > 3 hours trying to get to 
@@ -156,6 +156,56 @@ d_cisr_scales =
             slp = slp1 + slp2 + slp5,
             
             
+            
+            #Now lets think about a score for just insomnia (e.g. reduced sleep)
+            #on a 0-4 scale
+            
+            #Sleep symptom 1: nights out of past 7 with problems with sleep
+            slp_dec_1 = if_else(FKDQ4010 == 3,1,0),    #at least 4/7 days with sleep probs (less than usual)
+            slp_dec_2 = if_else(FKDQ4030 == 3,1,0),    #at least 4/7 days with >= 3 hours getting to sleep
+            slp_dec_3 = case_when(FKDQ4020 == 2 ~ 0,   #length of time getting to sleep
+                                  FKDQ4020 == 3 ~ 1,
+                                  FKDQ4020 == 4 ~ 1,
+                             TRUE ~ 0),
+            slp_dec_4 = if_else(FKDQ4040 == 2,1,0), # woke > 2 hours early
+            
+            slp_dec = slp_dec_1 + slp_dec_2 + slp_dec_3 + slp_dec_4,
+            
+            
+            # Now hypersomnia (e.g. increased sleep)
+            #on a 0-4 scale
+            
+            slp_inc_1 = if_else(FKDQ4110 == 3,1,0),    #at least 4/7 days with sleep probs (more than usual)
+            slp_inc_2 = if_else(FKDQ4130 == 3,1,0),    #at least 4/7 days with >3 hours more than usual
+            slp_inc_3 = case_when(FKDQ4120 == 2 ~ 1,   #length of times overslept
+                                  FKDQ4120 == 3 ~ 2,
+                                  FKDQ4120 == 4 ~ 2,
+                                  TRUE ~ 0),
+            
+            slp_inc = slp_inc_1 + slp_inc_2 + slp_inc_3,
+            
+            
+            #Appetite + Weight Decrease (0-4 scale)
+            app_dec_1 = if_else(FKDQ2000 == 2,1,0), # Loss of appetite (past month)
+            app_dec_2 = if_else(FKDQ2010 == 2,1,0), # Lost any weight (past month)
+            app_dec_3 = case_when(FKDQ2030 == 1 ~ 2,   #half a stone or more
+                                  FKDQ2030 == 2 ~ 1,   #less than half a stone
+                                  TRUE ~ 0),
+            
+            app_dec = app_dec_1 + app_dec_2 + app_dec_3,     
+            
+            
+            #Appetite + Weight Increase (0-4 scale)
+            app_inc_1 = if_else(FKDQ2100 == 2,1,0), # Increase of appetite (past month)
+            app_inc_2 = if_else(FKDQ2110 == 2,1,0) + if_else(FKDQ2120 == 2,1,0), #Increase of weight
+            app_inc_3 = case_when(FKDQ2140 == 1 ~ 2,   #half a stone or more
+                                  FKDQ2140 == 2 ~ 1,   #less than half a stone
+                                  TRUE ~ 0),
+            
+            app_inc = app_inc_1 + app_inc_2 + app_inc_3, 
+              
+              
+            
             #Irritability
             
             #irritability symptom 1
@@ -174,7 +224,7 @@ d_cisr_scales =
             irt = irt1 + irt2 + irt3 + irt4,
             
             
-            #Depression
+            #Depression CISR scale
             
             #depression symptom 1 - anhedonia
             dep1 = if_else(FKDQ5030 >= 2,1,0),
@@ -182,7 +232,7 @@ d_cisr_scales =
             #depression symptom 2 - feeling sad days/7
             dep2 = if_else(FKDQ5040 == 3,1,0),
             
-            #depression symptom 3 sad/anhedonia >3 hours/day
+            #depression symptom 3 sad/uninterested >3 hours/day
             dep3 = if_else(FKDQ5050 == 2,1,0),
             
             #depression symptom 4 nothing cheered up
@@ -190,6 +240,69 @@ d_cisr_scales =
             
             #Total depression score
             dep = dep1 + dep2 + dep3 + dep4,
+            
+            
+            #Just sadness
+            
+            sad1 = if_else(FKDQ5010 == 2,1,0), # Felt sad/miserable/depressed in past 7 days
+            
+            sad2 = if_else(FKDQ5040 == 3,1,0), # Feeling sad days/7
+            
+            sad3 = if_else(FKDQ5050 == 2,1,0), # sad/uninterested >3 hours/day
+            
+            sad4 = if_else(FKDQ5070 == 3,1,0), # Nothing cheered up
+            
+            #Total sadness score
+            sad = sad1 + sad2 + sad3 + sad4,
+            
+            
+            #Some individual symptoms
+            
+            #Early morning worsening
+            morn = if_else(FKDQ5100 == 1,1,0), # Feeling sad worse in the morning
+            
+            #Reduced interest in sex
+            dsx = if_else(FKDQ5110 == 4,1,0),
+            
+            #Restlessness
+            rstl = if_else(FKDQ5120 == 2,1,0),
+            
+            #Slowing
+            slow = if_else(FKDQ5130 == 2,1,0),
+            
+            #Anhedonia
+            anh = if_else(FKDQ5030 >= 2,1,0), # been able to enjoy things as much as usual
+            
+            #Self neglect (from CAPE)
+            sneg = case_when(FKPE2080 == 1 ~ 1,
+                             FKPE2080 == 2 ~ 1,
+                             TRUE ~ 0),
+            
+            
+            #Motivation (from CAPE)
+            
+            #Feel lack motivation
+            mot1 = case_when(FKPE2020 == 1 ~ 1,
+                             FKPE2020 == 2 ~ 1,
+                             TRUE ~ 0),
+            
+            #Spend days doing nothing
+            mot2 = case_when(FKPE2030 == 1 ~ 1,
+                             FKPE2030 == 2 ~ 1,
+                             TRUE ~ 0),
+            
+            #Lack get up and go
+            mot3 = case_when(FKPE2040 == 1 ~ 1,
+                             FKPE2040 == 2 ~ 1,
+                             TRUE ~ 0),
+            
+            #Never get things done
+            mot4 = case_when(FKPE2090 == 1 ~ 1,
+                             FKPE2090 == 2 ~ 1,
+                             TRUE ~ 0),
+            
+            #Motivation total
+            mot = mot1 + mot2 + mot3 + mot4,
             
             
             #Depressive ideas (scores 0-5)
@@ -200,7 +313,7 @@ d_cisr_scales =
             #depressive ideas symptom 2 - Inadequacy 
             did2 = if_else(FKDQ5150 == 2,1,0),
             
-            #depressive ideas symptom 3 - Hopelessness
+            #depressive ideas symptom 3 - Helplessness
             did3 = if_else(FKDQ5160 == 2,1,0),
             
             #depressive ideas symptom 4 - Life not worth living
@@ -212,6 +325,22 @@ d_cisr_scales =
             #Total depressive ideas score
             did = did1 + did2 + did3 + did4 + did5,
             
+            
+            #Just the ideas
+            dcog1 = if_else(FKDQ5140 >= 3,1,0), #Guilty
+            dcog2 = if_else(FKDQ5150 == 2,1,0), #Inadequacy
+            dcog3 = if_else(FKDQ5160 == 2,1,0), #Helplessness
+            
+            #total depressive cognitions score
+            dcog = dcog1 + dcog2 + dcog3,
+            
+            #Suicidal thoughts
+
+            stb1 = if_else(FKDQ5170 >= 2,1,0), #Life not worth living
+            stb2 = if_else(FKDQ5180 == 2,1,0), #Thoughts of harming self
+            stb3 = if_else(FKDQ5190 == 2,1,0), #Suicidal ideation 
+
+            stb = stb1 + stb2 + stb3,
             
             #Worry
             
@@ -302,11 +431,15 @@ d_cisr_scales =
             pan = pan1 + pan2 + pan3
             
   ) |>
-  
-  select(id,som,ftg,con,slp,irt,dep,did,wor,anx,pho,pan)
+  select(id,ach,ftg,con,
+         slp,slp_dec,slp_inc,
+         app_dec,app_inc,irt,
+         dep,sad,morn,dsx,rstl,slow,anh,sneg,mot,
+         did,dcog,stb,
+         wor,anx,pho,pan)
 
 
-### CISR Domain Scales -----
+### Domain Scores -----
 
 #using CIS-R symptom data create specific symptom scores (somatic, 
 #psychological, atypical). These will be created by summing individual symptoms. 
@@ -433,7 +566,7 @@ d_symptom_score =
   ) |>
   
   #Make a common weight gain variable from the ALSPAC sex-split variables
-  mutate(FKDQ2115 = rowSums(across(FKDQ2110:FKDQ2120),na.rm = T))|> 
+  mutate(FKDQ2115 = rowSums(across(FKDQ2110:FKDQ2120),na.rm = T))  |> 
   
   #Build the scores using the variables above
   transmute(id,
@@ -710,34 +843,6 @@ d_smfq =
 #   ggplot(aes(x = age,y = smfq_total)) +
 #   geom_boxplot()
 
-## SAPAS ------
-
-#We also include negative symptoms in keeping with our leptin paper
-
-#SAPAS is 8x binary items, so is binomial from 8 which is simple - 
-d_sapas <- 
-  d_0 |> 
-  select(alnqlet,FKDQ1000,starts_with("FKPE1")) |> 
-  rename(id  = alnqlet) |>
-  
-  #Get rid of missing data on the basis that if you have a depression diagnosis
-  #you must have completed the CISR
-  filter(FKDQ1000 >=0) |>
-  select(id, starts_with("FKPE1")) |>
-
-  
-  #Make all the <0 codes into NA
-  mutate(across(-id,~if_else(. < 0,NA_integer_,.))) |>
-  
-  #Do some reverse coding so that higher scores == more personality difficulty
-  mutate(FKPE1020 = case_when(FKPE1020 == 0 ~ 1,
-                              FKPE1020 == 1 ~ 0,
-                              TRUE ~ FKPE1020))
-
-d_sapas <- 
-  d_sapas |> 
-  transmute(id,sapas_total = rowSums(across(where(is.numeric))))
-
 
 ## CAPE ------
 
@@ -754,7 +859,6 @@ d_cape <-
   #Reverse code
   mutate(across(-id,~4 - .x)) |> 
   transmute(id,cape_total = rowSums(across(where(is.numeric))))
-
 
 
 ## Auxillary Variables ------
@@ -955,12 +1059,12 @@ d_mi =
   #Add CISR symptom scores
   full_join(d_symptom_score, by = "id") |>
   
-  #Add the SAPAS and CAPE data
-  full_join(d_sapas, by = "id") |>
+  #Add the  CAPE data
   full_join(d_cape, by = "id") |>
   
   #Add historic SMFQ Data
   full_join(d_smfq, by = "id") |>
+
   
   #Glue in covariates
   left_join(d_cv |> select(-c(bmi9,starts_with("smfq"))), by = "id") |>
@@ -1028,7 +1132,7 @@ d_mi =
 #Make sure our outcomes are coded as factors 
 d_mi <- 
   d_mi |>
-  relocate(id,cisr_dep,som:pan,atypical,psychological,somatic,anxiety,sapas_total,cape_total) |>
+  relocate(id,cisr_dep,ach:pan,atypical,psychological,somatic,anxiety,cape_total) |>
   mutate(across(.cols = cisr_dep:pan,.fns = factor)) 
 
 #This is the point at which we set our dataset in terms of participants - we 
@@ -1059,7 +1163,7 @@ var_keep <-
 d_mi <- 
   d_mi |>
   select(all_of(var_keep)) |>
-  relocate(id,cisr_dep,som:pan,atypical,psychological,somatic,anxiety,sapas_total,cape_total) 
+  relocate(id,cisr_dep,ach:pan,atypical,psychological,somatic,anxiety,cape_total) 
 
 
 
@@ -1067,7 +1171,7 @@ d_mi <-
 #are coded as integers
 is_int_var = 
   d_mi |> 
-  select(-c(id:pan,sc,me,sex,eth,smk24)) |>
+  select(-c(id:pan,sc,me,sex,eth,smk24,ph,ph_type)) |>
   pivot_longer(everything()) |> 
   group_by(name) |> 
   nest() |>
@@ -1096,5 +1200,7 @@ write_rds(d_mi,paste(data_dir,"alspac_data_final.rds",sep = '//'))
 d <- d_mi
 
 #Do some clearing up
-rm(list = c("d_aux","d_cape","d_cisr","d_cisr_scales","d_corr_pairs","d_sapas","d_smfq","d_split","d_symptom_score","d_train","d_mi"))
+rm(list = c("d_aux","d_cape","d_cisr","d_cisr_scales","d_corr_pairs","d_sapas",
+            "d_smfq","d_split","d_symptom_score","d_train","d_mi","d_cape_items","d_cisr_items",
+            "is_int_var","var_keep"))
 

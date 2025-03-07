@@ -49,7 +49,7 @@ d <-
 
 
 #Set our covariates
-covars = c("sex","bmi24","smk24","audit_c")
+covars = c("sex","bmi24","smk24","audit_c","ph")
  
 
 #Do some clearing up
@@ -72,19 +72,19 @@ rm(list = c("wdn","valid_vars_f24","valid_vars_f9","v_0"))
 #which are also similar to the existing literature e.g. in the Milaneschi
 #paper
 
-#-Combination 1 (i.e. PLS component 1): FTG, SLP, and SOM (aches and pains)
-#-Combination 2 (i.e. PLS component 2): ANX, WOR and DID
+#-Combination 1 (i.e. PLS component 1): FTG, SLP_DEC, MOT, and ACH
+#-Combination 2 (i.e. PLS component 2): ANX and WOR
 
 #Note that depressed mood (dep) is common to both and a requirement for a depression
 #diagnosis itself so we do not include it in these subgroup profiles
 
 d_symptom_score <- 
   d |>
-  select(id,cisr_dep,ftg,slp,som,anx,wor,did) |>
-  mutate(across(.cols = ftg:did,.fns = ~as.numeric(.x)-1)) |>
+  select(id,cisr_dep,ftg,slp_dec,mot,ach,anx,wor) |>
+  mutate(across(.cols = ftg:wor,.fns = ~as.numeric(.x)-1)) |>
   transmute(id,cisr_dep,
-            c1 = ftg+slp+som,
-            c2 = anx+wor+did)
+            c1 = ftg+slp_dec+mot+ach,
+            c2 = anx+wor)
 
 #Look at how these synthetic scores are distributed
 p_cisr_scores <- 
@@ -92,14 +92,14 @@ p_cisr_scores <-
   pivot_longer(-c(cisr_dep,id)) |>
   drop_na(cisr_dep) |>
   mutate(name = case_when(name == "c1" ~ "Somatic \nSymptoms",
-                          name == "c2" ~ "Psychic \nSymptoms")) |>
+                          name == "c2" ~ "Anxiety \nSymptoms")) |>
   mutate(cisr_dep = case_when(cisr_dep == 0 ~ "No Depression",
                               cisr_dep == 1 ~ "ICD10 Depression")) |>
   ggplot(aes(value,fill = cisr_dep)) +
   geom_histogram(binwidth = 1,colour = "black",linewidth = 0.25) +
   facet_wrap(~cisr_dep+name,ncol = 2, scales = "free") +
   theme(panel.grid = element_blank()) +
-  scale_x_continuous(breaks = c(0,2,4,6,8,10)) +
+  scale_x_continuous(breaks = seq(0,16,2)) +
   scale_fill_manual(values = c("#32324B","#E1AF64"))+
   theme(panel.grid = element_blank(),
         axis.title  = element_text(size = 8),
@@ -109,17 +109,19 @@ p_cisr_scores <-
         legend.position = "none") +
   labs(x = "Score", 
        y = "Count") +
-  geom_vline(xintercept = c(6.5),lty = 2,linewidth = 0.25)
+  geom_vline(xintercept = c(4.5),lty = 2,linewidth = 0.25) +
+  geom_vline(xintercept = c(8.5),lty = 2,linewidth = 0.25)
 
 p_cisr_scores
 
-#Look like a cut at 6 for both measures would be reasonable for defining top/bottom halfs
+#Look like a cut at 4 for anxiety and 8 for somatic would be reasonable for defining top/bottom halfs
 
 #Save this for a supplementary figure
 ggsave('./Figures/depression_subtype_scales.pdf',plot = p_cisr_scores,width = 6,height = 4)
 
 
-#So we would be looking at the psychic and somatic score domains within people with depression - 
+#So we would be looking at the anxiety and somatic score domains within people with depression - 
+#which is 337 individuals
 d_symptom_score |>
   filter(cisr_dep == 1) |>
   drop_na()
@@ -128,8 +130,8 @@ d_symptom_score |>
 d_symptom_score|>
   filter(cisr_dep == 1) |>
   drop_na() |>
-  mutate(psy_split      = if_else(c2 >= 6,1,0),
-         som_split      = if_else(c1 >= 6,1,0))|>
+  mutate(anx_split      = if_else(c2 >= 5,1,0),
+         som_split      = if_else(c1 >= 9,1,0))|>
   select(-c(id,cisr_dep,c1:c2)) |>
   pivot_longer(everything()) |>
   count(name,value) |>
@@ -143,8 +145,8 @@ p_overlap <-
   d_symptom_score|>
   filter(cisr_dep == 1) |>
   drop_na() |>
-  mutate(som_split  = if_else(c1 >= 6,1,0),
-         psy_split  = if_else(c2 >= 6,1,0))|>
+  mutate(som_split  = if_else(c1 >= 9,1,0),
+         anx_split  = if_else(c2 >= 5,1,0))|>
   select(-c(id,cisr_dep,c1:c2)) |>
   as.data.frame() |>
   upset(order.by = "freq")
@@ -177,7 +179,7 @@ d_symptom_score |>
   left_join(d_sev,by = "id") |>
   pivot_longer(c1:c2) |>
   mutate(name = case_when(name == "c1" ~ "Somatic \nSymptoms",
-                          name == "c2" ~ "Psychic \nSymptoms")) |>
+                          name == "c2" ~ "Anxiety \nSymptoms")) |>
   drop_na() |>
   ggplot(aes(x = dep_sev,y = value)) +
   geom_boxplot() +
@@ -193,32 +195,32 @@ d_symptom_score |>
 
 d_outcomes <- 
   d |>
-  select(id,cisr_dep,cisr_dep_mod,cisr_dep_sev,ftg,slp,som,anx,wor,did) |>
-  mutate(across(.cols = c(cisr_dep,ftg:did),.fns = ~as.numeric(.x)-1)) |>
+  select(id,cisr_dep,cisr_dep_mod,cisr_dep_sev,ftg,slp_dec,mot,ach,anx,wor) |>
+  mutate(across(.cols = c(cisr_dep,ftg:wor),.fns = ~as.numeric(.x)-1)) |>
   transmute(id,cisr_dep,
-            c1 = ftg+slp+som,
-            c2 = anx+wor+did) |>
+            c1 = ftg+slp_dec+mot+ach,
+            c2 = anx+wor) |>
   drop_na() |>
-  mutate(som_plus   = if_else((c1 >= 6) & (cisr_dep == 1),1,0),
-         psy_plus   = if_else((c2 >= 6) & (cisr_dep == 1),1,0)) |>
+  mutate(som_plus   = if_else((c1 >= 9) & (cisr_dep == 1),1,0),
+         anx_plus   = if_else((c2 >= 5) & (cisr_dep == 1),1,0)) |>
   select(-c(c1:c2)) |>
   mutate(across(.cols = contains("_split")|contains("_any")|contains("_plus"),.fns = ~factor(.x)))
 
 
 #Diagnosis - related
 
-#CISR depression - 337 cases in the full  data
+#CISR depression - 337 cases in the full data
 d_outcomes |> count(cisr_dep)
 
 
-# High Psychic symptoms
+# High Anxiety symptoms
 
-# Among participants with ICD-10 depression: 88 no, 249 yes
-d_outcomes  |> filter(cisr_dep == 1) |> count(psy_plus)
+# Among participants with ICD-10 depression: 140 no, 197 yes
+d_outcomes  |> filter(cisr_dep == 1) |> count(anx_plus)
 
 #High Somatic symptoms
 
-# Among participants with ICD-10 depression: 111 no, 226 yes
+# Among participants with ICD-10 depression: 179 no, 158 yes
 d_outcomes  |> filter(cisr_dep == 1) |>  count(som_plus)
 
 
@@ -248,7 +250,7 @@ d_train <-
   #Some other manipulations. We are going to take a limited subset of clinical
   #relevant variables. Hopefully although this is inevitably subjective, we can 
   #make sensible choices
-  relocate(c(sex,bmi24,smk24,audit_c,sc,me,md),.after = id) |>
+  relocate(c(sex,bmi24,smk24,audit_c,ph,sc,me,md),.after = id) |>
 
   
   #Now select the final sets of variables for our analysis
@@ -291,7 +293,7 @@ d_train <-
   
   #Now you need to graft on your outcomes
   left_join(d_outcomes,by = "id") |>
-  relocate(cisr_dep:psy_plus,.after = id)
+  relocate(cisr_dep:anx_plus,.after = id)
 
 
 
@@ -307,7 +309,7 @@ d_var_type =
   d_train |>
   
   #Remove our categorical variables
-  select(-c(id:psy_plus,sc, me,sex,smk24,multi_demo)) |>
+  select(-c(id:anx_plus,sc, me,sex,smk24,ph,multi_demo)) |>
   pivot_longer(everything()) |>
   drop_na() |>
   group_by(name) |>
@@ -339,7 +341,7 @@ f24_blood_names <-
   pull(infl)
 
 iv_f24_blood <- 
-  c("sex","audit_c","smk24","bmi24",
+  c("sex","audit_c","smk24","bmi24","ph",
     f24_blood_names,
     "cluster_3_ev")
 
@@ -360,7 +362,7 @@ cont_vars <- intersect(iv_f24_blood,cont_vars)
 #depression but are not blood-related, to act as a positive control
 iv_soc <- 
   c("sex","audit_c","smk24","bmi24", # Demographic variables
-    "sc",                            # Maternal Social class- correlates 
+    "sc","ph",                       # Maternal Social class- correlates 
                                      # substantially with maternal education so 
                                      # we will only pick one
     "ace_total_classic",             # ACES
@@ -434,7 +436,7 @@ d_folds = nested_cv(d_train,
 #Fit our models using nested cross validation, nesting over each symptom
 dv_list <- c("cisr_dep",
              "som_plus", 
-             "psy_plus")
+             "anx_plus")
 
 #Make output table
 ml_result = 
@@ -997,14 +999,13 @@ lobstr::obj_size(ml_result)
 
 #Really quick and dirty plot
 
-
 #Plot the balanced accuracy
 ml_result_compact |>
   select(symptom:wflow_id,.metrics) |>
   unnest(.metrics) |>
   # filter(.metric == "bal_accuracy") |>
   separate_wider_delim(wflow_id,delim = '_',names = c("vars","mod_type")) |>
-  mutate(symptom = factor(symptom,levels = c("cisr_dep","psy_plus","som_plus"))) |>
+  mutate(symptom = factor(symptom,levels = c("cisr_dep","anx_plus","som_plus"))) |>
   ggplot(aes(x = symptom,y = .estimate,shape = vars,colour = vars,
              group = vars)) +
   geom_point(position = position_dodge(width = 0.3)) +
@@ -1012,6 +1013,7 @@ ml_result_compact |>
   theme(panel.grid = element_blank(),
         axis.text.x.bottom = element_text(angle = -90)) +
   geom_hline(yintercept = c(0,.5),lty = 2) +
+  scale_y_continuous(breaks = seq(-0.2,1,0.2)) +
   labs(x = "Model",y = "Metric")
 
 ## Performance model ------
@@ -1079,7 +1081,7 @@ metric_name <-
 
 symptom_name <- 
   c("ICD-10 Depression" = "cisr_dep",
-    "Psychic Symptoms"  = "psy_plus",
+    "Anxiety Symptoms"  = "anx_plus",
     "Somatic Symptoms"  = "som_plus")
 
 
@@ -1090,7 +1092,7 @@ cv_mod <-
   mutate(.metric = fct_relevel(.metric, c("Brier Score","Balanced Accuracy","AUROC","MCC"))) |> 
   
   mutate(symptom = fct_recode(symptom, !!!symptom_name)) |>
-  mutate(symptom = fct_relevel(symptom, c("ICD-10 Depression","Psychic Symptoms","Somatic Symptoms"))) |>  
+  mutate(symptom = fct_relevel(symptom, c("ICD-10 Depression","Anxiety Symptoms","Somatic Symptoms"))) |>  
   
   mutate(disp_line = case_when(.metric == "AUROC" ~ 0.5,
                                .metric == "Balanced Accuracy" ~ 0.5,
@@ -1184,7 +1186,7 @@ d_cv_mod_plot |>
 #We can use the posterior samples to make a direct comparison between the immuno-metabolic variable's predictive
 #accuracy for the psychic vs somatic symptom profiles:
 cv_mod |>
-  filter(.metric %in% c("Balanced Accuracy") & symptom %in% c("Psychic Symptoms","Somatic Symptoms")) |>
+  filter(.metric %in% c("Balanced Accuracy") & symptom %in% c("Anxiety Symptoms","Somatic Symptoms")) |>
   mutate(draws = 
            list(model |> 
                   tidybayes::tidy_draws()  |> 
@@ -1200,244 +1202,7 @@ cv_mod |>
   filter(var_set == "Immuno-metabolic" & ml_method == "en" & .metric %in% c("Balanced Accuracy")) |>
   select(-c(.metric,var_set,ml_method)) |>
   pivot_wider(names_from = symptom,values_from = value) |>
-  mutate(value_diff = `Somatic Symptoms` - `Psychic Symptoms`) |>
+  mutate(value_diff = `Somatic Symptoms` - `Anxiety Symptoms`) |>
   ggdist::mean_hdci(value_diff,width = 0.95) |>
   as_tibble() |>
   mutate(across(where(is.double),~janitor::round_half_up(.x,digits = 3)))
-
-# Final performance + VI -------
-
-## Fit to full dataset ------
-
-#Fit the best model to the full dataset
-vi_out <- 
-  tibble(symptom  = dv_list,
-         final_vi = vector(mode = 'list',length = 1))
-
-for(j in 1:nrow(ml_result)){
-  
-  #Get the DV for this loop
-  dv = dv_list[[j]]
-  
-  #Make the cluster 3 EV model here for the full dataset
-  d_res_model <- 
-    left_join(
-      d_train |>
-        select(id,cisr_dep,contains('_f24'),all_of(covars)) |>
-        drop_na(cisr_dep) |>
-        filter(cisr_dep == 0) |>
-        select(-cisr_dep) |>
-        pivot_longer(-c(id,all_of(covars)),names_to = 'infl',values_to = 'infl_value') |>
-        drop_na() |>
-        nest_by(infl,.key = "data_nd"),
-      
-      d_train |>
-        select(id,cisr_dep,contains('_f24'),all_of(covars)) |>
-        drop_na(cisr_dep) |>
-        filter(cisr_dep == 1) |>
-        select(-cisr_dep) |>
-        pivot_longer(-c(id,all_of(covars)),names_to = 'infl',values_to = 'infl_value') |>
-        drop_na() |>
-        nest_by(infl,.key = "data_d"),
-      by = "infl") |>
-    mutate(infl = str_remove(infl,"_f24")) |>
-    
-    #Only for the cluster 3 variables
-    filter(infl %in% c(infl_clus |> filter(clus == 3) |> pull(infl))) |>
-    
-    mutate(m1 = 
-             list(
-               lm(infl_value ~ sex + bmi24 + smk24 + audit_c,data = data_nd)
-             ),
-           r1 = 
-             list(rstudent(m1))  ) |>
-    mutate(
-      pred_nd = 
-        list(
-          predict.lm(m1,newdata = data_nd) |>
-            as_tibble() |>
-            rename(pred = value) |>
-            bind_cols(data_nd) |>
-            mutate(resid = infl_value-pred)
-        ),
-      pred_d = 
-        list(
-          predict.lm(m1,newdata = data_d) |>
-            as_tibble() |>
-            rename(pred = value)|>
-            bind_cols(data_d) |>
-            mutate(resid = infl_value-pred)
-        ),
-      mu_nd = list(mean(pred_nd$resid,na.rm = T)),
-      sd_nd = list(sd(pred_nd$resid,na.rm = T))
-    ) |>
-    ungroup() |>
-    unnest(cols = c(mu_nd,sd_nd))
-  
-  #Now we have the models and the values to use for standardisation
-  
-  #Next step is to get the extreme value counts in the training data
-  d_train_ev <- 
-    d_res_model |>
-    select(infl,pred_nd,pred_d,mu_nd,sd_nd) |>
-    pivot_longer(starts_with("pred_")) |>
-    unnest(value) |>
-    
-    #Standardise the residuals using the mean and sd of residuals from the non-depressed group
-    mutate(resid_z = (resid-mu_nd)/sd_nd) |>
-    
-    mutate(ex_dev = if_else(abs(resid_z) > 2.6,1,0) |> as.integer())  |>
-    select(infl,id,all_of(covars),resid_z,ex_dev) |>
-    group_by(id) |>
-    reframe(cluster_3_ev = sum(ex_dev))
-  
-  #Glue this onto the outer loop training data
-  d_train_1 <- 
-    d_train |>
-    left_join(d_train_ev,by = "id")
-  
-  
-  #Prep the data for model fitting
-  if(str_detect(dv,'_plus')){
-    
-      f_train <- 
-        
-        #Prepare the full training data
-        d_train_1 |>
-        dplyr::select(-c(multi_demo)) |>
-        filter(cisr_dep == 1) |>
-        rename(class = !!dv) |>
-        drop_na(class) |>
-        dplyr::select(-c(any_of(dv_list),ends_with("_any"),ends_with("_class"),ends_with("_sev")) )|>
-        mutate(class = factor(class))
-
-      
-  } else{
-    
-    f_train <- 
-      
-      #Prepare the full training data
-      d_train_1 |>
-      dplyr::select(-c(multi_demo)) |>
-      rename(class = !!dv) |>
-      drop_na(class) |>
-      dplyr::select(-c(any_of(dv_list),ends_with("_any"),ends_with("_class"),ends_with("_sev")) )|>
-      mutate(class = factor(class))
-    
-    
-  }
-
-
-  #Get the best performing model and predict the outcomes of the whole dataset. We can select 
-  #the metric we use for this here, although the models are selected on balanced accuracy in
-  #the fitting process, so do keep that in mind
-
-  final_models <- 
-    ml_result |>
-    filter(symptom == dv) |>
-    pluck('ml',1) |>
-    select(-c(.mod_posterior,best_metric)) |>
-    unnest(.metrics) |>
-    #filter(.metric == "bal_accuracy" & str_detect(wflow_id,"_en")) |> #or whatever metric you want
-    filter(.metric == "mcc" & str_detect(wflow_id,"_en")) |> #or whatever metric you want
-    group_by(wflow_id) |>
-    slice_max(.estimate) |>
-    mutate(data = list(f_train)) |>
-    mutate(final_fit = map2(best_wf_final,data,~fit(.x,data = .y)))
-  
-  
-  
-  #Estimate variable importance for the elastic net models
-  final_vi <- 
-    final_models |> 
-    ungroup() |>
-    filter(str_detect(wflow_id,"_en")) |>
-    mutate(.penalty = map_dbl(best_params,~.x$penalty),
-           mp       = map(final_fit,~extract_fit_parsnip(.x))) |>
-    mutate(vi = map2(mp,.penalty,~vip::vi(.x,lambda = .y,method = 'model'))) |>
-    select(wflow_id,.estimate,.penalty,vi)
-  
-  vi_out$final_vi[[j]] <- final_vi
-  
-}
-
-#Save the bootstrapped data
-write_rds(vi_out,paste("./Models/depression_subtype_vi.rds"))
-#vi_out <- read_rds("./Models/depression_subtype_vi.rds")
-
-## Plot results ------
-
-wflow_name <- 
-  c( "Full"                  = "full",
-     "Sociodemographic"      = "soc",
-     "Mental Health History" = "dep",
-     "Immuno-metabolic"      = "blood")
-
-
-metric_name <- 
-  c( "Balanced Accuracy" = "bal_accuracy",
-     "Brier Score"       = "brier_class",
-     "MCC"               = "mcc",
-     "AUROC"             = "roc_auc")
-
-diagnosis_names <- 
-  c( "ICD-10 Depression" = "cisr_dep",
-     "Psychic Symptoms"  = "psy_plus",
-     "Somatic Symptoms"  = "som_plus")
-
-
-
-## Plot final VI ######
-
-
-#What are the top ten variables for ICD-10 depression diagnosis in the best performing model (the full model)?
-vi_out |>
-  select(symptom,final_vi) |>
-  unnest(final_vi) |>
-  select(symptom,wflow_id,vi) |>
-  unnest(vi) |>
-  mutate(wflow_id = str_remove(wflow_id,'_en')) |>
-  filter(symptom == "cisr_dep" & wflow_id == "full") |>
-  slice_max(Importance,n = 10)
-
-
-vi_out |>
-  select(symptom,final_vi) |>
-  unnest(final_vi) |>
-  select(symptom,wflow_id,vi) |>
-  unnest(vi) |>
-  mutate(wflow_id = str_remove(wflow_id,'_en')) |>
-  filter(symptom == "som_plus" & wflow_id == "full") |>
-  slice_max(Importance,n = 10)
-
-
-
-#Just look at one variable set (full model) and just ICD-10 Depression e.g.
-p_final_dep_vi <- 
-  vi_out |>
-  select(symptom,final_vi) |>
-  unnest(final_vi) |>
-  select(symptom,wflow_id,vi) |>
-  unnest(vi) |>
-  mutate(Variable = str_remove(Variable,'_f24')) |>
-  mutate(Variable = str_remove(Variable,'_')) |>
-  mutate(Variable = fct_reorder(Variable,Importance,max)) |>
-  filter(wflow_id == "full_en") |>
-  mutate(symptom = fct_recode(symptom, !!!diagnosis_names)) |>
-  ggplot(aes(x    = Importance,
-             y    = Variable)) +
-  geom_col() +
-  facet_wrap(~symptom,nrow = 1) +
-  theme(axis.text = element_text(size = 8),
-        axis.title = element_text(size = 8),
-        axis.text.x.bottom = element_text(angle = 90,vjust=0.5),
-        strip.text = element_text(size = 8),
-        panel.background = element_rect(fill = "grey95")) +
-  labs(x = "Variable Importance", y = "Variable") +
-  scale_fill_brewer(palette = "Dark2")
-
-p_final_dep_vi
-
-ggsave('./Figures/depression_model_vi.pdf',plot = p_final_dep_vi, width = 7,height = 7)
-
-

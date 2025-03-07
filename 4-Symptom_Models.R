@@ -54,14 +54,20 @@ im_names =
 ##Prepare our covariates -------
 
 #These are the covariates that our DAG suggests form the minimum adjustment set
-covars = c("sex","bmi24","smk24","audit_c")
+#plus our physical health variable
+covars = c("sex","bmi24","smk24","audit_c","ph")
 
 d_covars = 
   d |>
-  select(id, all_of(covars)) 
+  select(id, all_of(covars)) |>
+  mutate(bmi24 = zscore(bmi24))
 
 
 # Diagnosis association -------
+
+#Start with the association between depression and immuno-metabolic variables
+#which is the same as our univariate models in the last section of the manuscript
+
 
 ## Model =====
 
@@ -81,7 +87,7 @@ d_icd =
 d_icd = 
   d_icd |>
   mutate(
-    model = glm(cisr_dep ~ infl_value * (sex + bmi24 + smk24 + audit_c),
+    model = glm(cisr_dep ~ infl_value * (sex + bmi24 + smk24 + audit_c + ph),
                 family = binomial(link = 'logit'),
                 data = data,
                 method = "brglmFit") |> list(),
@@ -114,7 +120,7 @@ rownames(d_hm_icd) <-
   pull(infl)
 
 column_ha0 = 
-  HeatmapAnnotation(bar0 = anno_barplot(d_hm_icd |> rowMeans(),ylim = c(-0.015,0.015)))
+  HeatmapAnnotation(bar0 = anno_barplot(d_hm_icd |> rowMeans(),ylim = c(-0.02,0.02)))
 
 row_ha0 = 
   rowAnnotation(bar0 = anno_barplot(d_hm_icd |> colMeans(),ylim = c(-0.005,0.005)))
@@ -129,10 +135,12 @@ p_hm_icd =
           column_names_gp = gpar(fontsize = 6),
           heatmap_legend_param = list(title = "Marginal Effect"))
 
+#Here we see that the im-diagnosis association appears to be essentially a continuum, rather
+#that forming discrete clusters
 
-# Symptom scores -----
+# Domain scores -----
 
-## Build symptom scores ------
+## Build domain scores ------
 
 d_symptom_score <- 
   d |>
@@ -181,7 +189,7 @@ d_ss =
 #I think we need to stick to a common modelling approach. 
 d_ss = 
   d_ss |>
-  mutate(model = glm(cbind(s_value, nt - s_value) ~ infl_value * (sex + bmi24 + smk24 + audit_c),
+  mutate(model = glm(cbind(s_value, nt - s_value) ~ infl_value * (sex + bmi24 + smk24 + audit_c + ph),
                      family = binomial(link = 'logit'),
                      data = data,
                      method = "brglmFit") |> list(),
@@ -228,130 +236,40 @@ p_hm_ss =
         column_names_gp = gpar(fontsize = 6),
         heatmap_legend_param = list(title = "Marginal Effect"))
 
+#So some im values are associated with all symptoms either positive or negatve, some
+#have a bit of a mix
 
-# Negative Symptoms and Personality Items -----
-
-#Look at how these synthetic scores are distributed for CAPE and SAPAS
-d_sapas <- d |> select(id,sapas_total)
-d_cape  <- d |> select(id,cape_total)
-
-p_pers_scales <- 
-  bind_rows(d_sapas |>  pivot_longer(-id) ,
-            d_cape  |> pivot_longer(-id)) |>
-  mutate(name = str_remove(name,"_total")) |>
-  filter(name %in% c("sapas","cape"))  |>
-  mutate(name = toupper(name)) |>
-  ggplot(aes(value)) +
-  geom_histogram(binwidth = 1) +
-  facet_wrap(~name,ncol = 2) +
-  theme(panel.grid = element_blank()) +
-  scale_x_continuous(breaks = seq(0,30,4))  +
-  theme(panel.grid = element_blank(),
-        axis.title  = element_text(size = 8),
-        axis.text   = element_text(size = 6),
-        legend.text = element_text(size = 6),
-        legend.title = element_blank()) +
-  labs(x = "Score", 
-       y = "Count")
-
-
-## Model -----
-
-#We are going to model from the sum total scores
-pers_trial = tibble(pers = c("sapas_total","cape_total"),
-                    nt = c(8 ,     30))
-
-d_pers = 
-  left_join(d_sapas |> select(id,sapas_total),
-            d_cape  |> select(id,cape_total),
-            by = "id") |>
-  right_join(d_im,
-            by = "id") |>
-  left_join(d_covars,by = "id") |>
-  
-  pivot_longer(all_of(im_names), 
-               names_to = "infl", values_to = "infl_value") |> 
-  pivot_longer(sapas_total:cape_total, 
-               names_to = "pers", values_to = "pers_value") |> 
-  drop_na() |>
-  nest_by(infl,pers) |>
-  left_join(pers_trial,by = "pers")
-
-
-#I think we need to stick to a common modelling approach. The binomial has the
-#advantage that the results are a probability so will be on the same scale no
-#matter how many items are included. 
-
-d_pers = 
-  d_pers |>
-  mutate(model = glm(cbind(pers_value, nt - pers_value) ~ infl_value * (sex + bmi24 + smk24 + audit_c),
-                     family = binomial(link = 'logit'),
-                     data = data,
-                     method = "brglmFit") |> list(),
-         me = avg_comparisons(model,variables = list(infl_value = "sd"),
-                              by = TRUE,
-                              type = "response") |>
-           as_tibble() |>
-           list()
-  )
-
-d_pers |>
-  select(infl,pers,me) |>
-  unnest(me) |>
-  ungroup() |>
-  mutate(p.adj = p.adjust(p.value,method = 'fdr')) |>
-  filter(p.adj < 0.05) |>
-  ggplot(aes(x = estimate, xmin = conf.low, xmax = conf.high,y = infl)) +
-  geom_pointrange() +
-  facet_wrap(~pers,ncol = 4) +
-  geom_vline(xintercept = 0,lty = 2)
-
-
-## Heatmap ------
-
-d_hm_pers = 
-  d_pers |>
-  select(infl,pers,me) |>
-  unnest(me) |>
-  ungroup() |>
-  select(infl,pers,estimate) |>
-  pivot_wider(id_cols = "infl",names_from = "pers",values_from = "estimate") %>%
-  arrange(infl) |>
-  select(-infl) |>
-  as.matrix()
-
-rownames(d_hm_pers) <- 
-  d_pers |>
-  ungroup() |>
-  mutate(infl = str_remove(infl,"_f24"))  |>
-  distinct(infl) |>
-  pull(infl)
-
-column_ha = 
-  HeatmapAnnotation(bar1 = anno_barplot(d_hm_pers |> rowMeans(),ylim = c(-0.015,0.015)))
-
-row_ha = 
-  rowAnnotation(bar2 = anno_barplot(d_hm_pers |> colMeans(),ylim = c(-0.005,0.005)))
-
-
-p_hm_pers = 
-  Heatmap(d_hm_pers |> t(),
-          col = col_fun,
-          top_annotation = column_ha, 
-          right_annotation = row_ha,
-          row_names_gp = gpar(fontsize = 6),
-          column_names_gp = gpar(fontsize = 6),
-          heatmap_legend_param = list(title = "Marginal Effect"))
-
-
-# CISR Subscales -----
+# Symptom Scores -----
 
 ## Model =====
 
+#Make the number of trials for binomial regression
+cisr_trial = 
+  tibble(ss = c("ach","ftg" ,"con","slp" ,"slp_dec","slp_inc","app_dec","app_inc","irt","dep",
+                "sad","morn","dsx","rstl","slow"   ,"anh"    ,"sneg"   ,"mot"    ,"did","dcog",
+                "stb","wor","anx","pho","pan"),
+         nt = c(4    ,4     ,4    ,4     ,4        ,4        ,4       ,4         ,4    ,4   ,
+                4    ,1     ,1    ,1     ,1        ,1        ,1       ,4         ,5    ,3   ,
+                3    ,4     ,4    ,4     ,4) )
+
+#Which scales shall we use?
+
+#The original CISR scales only:
+# scales_use = c("ach","ftg" ,"con","slp" ,"irt","dep","did","wor","anx","pho","pan")
+
+#Expanded list
+scales_use = c("ach","ftg" ,"con","slp_dec","slp_inc","app_dec","app_inc","irt",
+               "sad","morn","dsx","rstl","slow"   ,"anh"    ,"sneg"   ,"mot"    ,"dcog",
+               "stb","wor","anx","pho","pan")
+
+length(scales_use)
+
+
+
 d_cisr_scales = 
   d |>
-  select(c(id,som:pan)) |>
-  mutate(across(som:pan,~as.integer(.x)-1))
+  select(c(id,all_of(scales_use))) |>
+  mutate(across(all_of(scales_use),~as.integer(.x)-1))
 
 #Quick plot
 p_cisr_scales <- 
@@ -359,7 +277,7 @@ p_cisr_scales <-
   pivot_longer(-id) |>
   ggplot(aes(value)) +
   geom_histogram(binwidth = 1) +
-  facet_wrap(~name,ncol = 6) +
+  facet_wrap(~name,ncol = 5) +
   theme(panel.grid = element_blank()) +
   scale_x_continuous(breaks = seq(0,30,2))  +
   theme(panel.grid = element_blank(),
@@ -371,24 +289,17 @@ p_cisr_scales <-
        y = "Count")
 
 
-#Make the number of trials for binomial regression
-cisr_trial = 
-  tibble(ss = c("som","ftg","con","slp","irt","dep","did","wor","anx","pho","pan"),
-         nt = 4) |>
-  mutate(nt = case_when(ss == "did" ~ 5,
-                        TRUE ~ nt))
-
-
+#Prepare data
 d_cisr_s = 
   left_join(d_im,
             d_cisr_scales |>
-              select(id,som,ftg,con,slp,irt,dep,did,wor,anx,pho,pan) ,
+              select(id,all_of(scales_use)),
             by = "id") |>
   left_join(d_covars,by = "id") |>
   
   pivot_longer(all_of(im_names), 
                names_to = "infl", values_to = "infl_value") |> 
-  pivot_longer(som:pan, 
+  pivot_longer(all_of(scales_use), 
                names_to = "ss", values_to = "s_value") |> 
   drop_na() |>
   nest_by(infl,ss) |>
@@ -397,7 +308,7 @@ d_cisr_s =
 #Fit the models - this bit is quite slow as you are fitting lots of complex models (>1200)
 d_cisr_s = 
   d_cisr_s |>
-  mutate(model = glm(cbind(s_value, nt - s_value) ~ infl_value * (sex + bmi24 + smk24 + audit_c),
+  mutate(model = glm(cbind(s_value, nt - s_value) ~ infl_value * (sex + bmi24 + smk24 + audit_c + ph),
                      family = binomial(link = 'logit'),
                      data = data,
                      method = "brglmFit") |> list(),
@@ -459,9 +370,9 @@ row_ha2 =
 p_hm = 
   d_hm |>
   t() |>
-  Heatmap(clustering_method_rows = "average",
+  Heatmap(clustering_method_rows = "complete",
           clustering_distance_rows = "euclidean",
-          clustering_method_columns = "average",
+          clustering_method_columns = "complete",
           clustering_distance_columns = "euclidean",
           col = col_fun,
           na_col = "grey",
@@ -472,12 +383,14 @@ p_hm =
           heatmap_legend_param = list(title = "Marginal Effect"))
 
 
+
+
 # Heatmap Assessbly -----
 
 
 #What would be ideal is to glue together all the heatmaps. Fortunately the 
 #complexheatmap package allows this
-ht_list = p_hm %v% p_hm_ss %v% p_hm_pers %v%  p_hm_icd
+ht_list = p_hm %v% p_hm_ss %v% p_hm_icd
 draw(ht_list)
 
 pdf(("./Figures/f24_heatmap_symptom.pdf"), width = 12.75, height = 4.45)
@@ -489,13 +402,13 @@ dev.off()
 #For a supplement we assemble our scale histograms
 
 p_symptoms <- 
-  (p_cisr_scales / (p_cisr_scores|p_pers_scales)) + 
+  (p_cisr_scales / (p_cisr_scores)) + 
   plot_annotation(tag_levels = "A") +
-  plot_layout(heights = c(2,1))
+  plot_layout(heights = c(4,1))
 
 
 ggsave(filename = "./Figures/f24_symptom_scale_histograms.pdf",
-       height = 4,
+       height = 6,
        width  = 8,
        plot = p_symptoms)
   
@@ -510,9 +423,10 @@ ggsave(filename = "./Figures/f24_symptom_scale_histograms.pdf",
 #able to produce it here (based on the package code)
 d_clust_infl = 
   d_hm |>
+  #d_hm_item |>
   #cbind(d_hm,d_hm_cape) |>
   dist(method = 'euclidean') |>
-  hclust(method = "average") 
+  hclust(method = "complete") 
 
 
 plot(d_clust_infl )
@@ -542,11 +456,11 @@ p_cisr_by_cluster <-
   #left_join(d_hm_icd |> as_tibble(rownames = "infl") |> rename(cisr_dep = estimate),by = "infl") |>
   left_join(clust_infl_names|> rename(infl = variable),by = "infl") |>
   group_by(cluster_id) |>
-  summarise_at(vars(anx:wor), mean, na.rm = TRUE) |>
+  summarise_at(vars(all_of(scales_use)), mean, na.rm = TRUE) |>
   pivot_longer(-cluster_id) |>
   
   mutate(name = factor(name, 
-                       levels = c("ftg","slp","did","som","irt","dep","con","pho","pan","anx","wor"))) |>
+                       levels = scales_use)) |>
   
   rename(estimate = value) |>
   ggplot(aes(x = cluster_id,y = name,fill = estimate)) +
@@ -568,7 +482,7 @@ p_cisr_by_cluster <-
 
 clust_3 = 
   clust_infl_names|>
-  filter(cluster_id == 3)
+  filter(cluster_id == 3) 
 
 #cluster 3 is our inflammation cells + friends cluster
 
@@ -576,13 +490,13 @@ clust_1 =
   clust_infl_names|>
   filter(cluster_id == 1)
 
-#Cluster 1 is the low association grouping 
+#Cluster 1 is the negative association grouping including  liver enzymes, crp and ha
 
 clust_2 = 
   clust_infl_names|>
   filter(cluster_id == 2)
 
-#Cluster 2 is the liver enzymes, crp and ha
+#Cluster 2 is the low association group
 
 
 ## Cluster 3 -----
@@ -615,8 +529,8 @@ p_cisr_symptom_cluster_3 =
   filter(p.adj < 0.05) |>
   select(infl,ss,estimate) |>
   # bind_rows(tibble(infl = "wbc",ss = "irt",estimate = NA_integer_)) |>
-  mutate(ss = factor(ss, 
-                     levels = c("ftg","slp","did","som","irt","dep","con","pho","pan","anx","wor"))) |>
+  # mutate(ss = factor(ss, 
+  #                    levels = scales_use)) |>
   arrange(ss) |>
   ggplot(aes(x = infl, y = ss, fill = estimate)) +
   geom_tile() +
@@ -631,37 +545,37 @@ p_cisr_symptom_cluster_3 =
   labs(x = "Immunometabolic Variable", y = "CISR Symptom Scale") + 
   coord_fixed()
 
-## Cluster 2 ------
+## Cluster 1 ------
 
 #Make a table of the names of the variables in our negative association cluster
-tab_cluster_2 <- 
+tab_cluster_1 <- 
   v_0 |> 
   filter(str_detect(name,"_F24")) |> 
   select(name, lab) |> 
   as_tibble() |>
   mutate(name = str_remove(name,"_F24") |> tolower()) |>
-  filter(name %in% clust_2$variable) |>
+  filter(name %in% clust_1$variable) |>
   arrange(name) |>
   rename(Variable = name,
          Description = lab) |>
   knitr::kable(format = "html", booktabs = TRUE) |>
   kableExtra::kable_styling(font_size = 11)
 
-tab_cluster_2
+tab_cluster_1
 
 #Make a plot of these variables
-p_cisr_symptom_cluster_2 =
+p_cisr_symptom_cluster_1 =
   d_cisr_s |>
   mutate(infl = str_remove(infl,'_f24')) |>
-  filter(infl %in% clust_2$variable) |>
+  filter(infl %in% clust_1$variable) |>
   select(infl,ss,me) |>
   unnest(me) |>
   ungroup() |>
   mutate(p.adj = p.adjust(p.value,method = 'fdr')) |>
   filter(p.adj < 0.05) |>
-  bind_rows(tibble(infl = "wbc",ss = c("ftg","slp","did","som","irt","dep","con","pho","pan","anx","wor"),estimate = NA_integer_)) |>
-  mutate(ss = factor(ss, 
-                     levels = c("ftg","slp","did","som","irt","dep","con","pho","pan","anx","wor"))) |>
+  bind_rows(tibble(infl = "wbc",ss = scales_use,estimate = NA_integer_)) |>
+  # mutate(ss = factor(ss, 
+  #                    levels = c("ftg","slp","did","som","irt","dep","con","pho","pan","anx","wor"))) |>
   arrange(ss) |>
   ggplot(aes(x = infl, y = ss, fill = estimate)) +
   geom_tile() +
@@ -679,8 +593,8 @@ p_cisr_symptom_cluster_2 =
 ## Plot Clustering ------
 
 p_cisr_symptom_cluster <- 
-  p_cisr_by_cluster+ p_cisr_symptom_cluster_3 + p_cisr_symptom_cluster_2  + 
-  plot_layout(guides = "collect",widths = c(3,11,4.75)) +
+  p_cisr_by_cluster+ p_cisr_symptom_cluster_3 + p_cisr_symptom_cluster_1  + 
+  plot_layout(guides = "collect",widths = c(3,11,6)) +
   plot_annotation(tag_levels = "A")
 
 

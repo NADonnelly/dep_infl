@@ -31,7 +31,19 @@ d <-
   read_rds(paste(data_dir,"alspac_data_final.rds",sep = '//'))
 
 
-## Prepare the immuno-metabolic dataset -----
+# Assemble Data ------
+
+## Covariates -------
+
+#We might need some covariates?
+#These are the covariates that our DAG suggests form the minimum adjustment set
+covars = c("sex","bmi24","smk24","audit_c","ph")
+
+d_covars = 
+  d_cv |>
+  select(id, all_of(covars)) 
+
+## Immuno-metabolic dataset -----
 
 #Prepare the F24 immunometabolic dataset
 d_im = 
@@ -43,42 +55,88 @@ d_im =
   mutate(across(-c(id,cisr_dep),zscore))
 
 
-
-##Prepare our covariates -------
-
-#We might need some covariates?
-#These are the covariates that our DAG suggests form the minimum adjustment set
-covars = c("sex","bmi24","smk24","audit_c")
-
-d_covars = 
-  d_cv |>
-  select(id, all_of(covars)) 
-
-## Prepare variable names =========
-
-
 #We need to make a set of names for our sets of variables
 
 #Get the names of the immunometabolic variables
 vars_metab = d_im |> select(-c(id,cisr_dep)) |> colnames()
 
-infl_clus <- 
+infl_clus <-
   read_csv('./Models/f24_infl_variable_clusters.csv')
 
 
-select_bloods <- 
-  infl_clus |> filter(clus != 1) |> pull(infl)
+select_bloods <-
+  infl_clus |> filter(clus != 2) |> pull(infl)
+
+## Symptom Scales ======
+
+#Which scales do we use?
+scales_use = c("ach","ftg" ,"con","slp_dec","slp_inc","app_dec","app_inc","irt",
+               "sad","morn","dsx","rstl","slow"   ,"anh"    ,"sneg"   ,"mot"    ,"dcog",
+               "stb","wor","anx","pho","pan")
 
 
-# Quick correlation plot -------
+d_cisr_scales = 
+  d |> 
+  select(c(id,all_of(scales_use))) |> 
+  mutate(across(all_of(scales_use),~as.integer(.x)-1))
 
-#Make a correlation plot of the F24 bloods in clusters 2 and 3 (get rid of the
-#non-interesting variables)
+
+#Make plots of the scores
+d_cisr_scales |>
+  select(id,all_of(scales_use)) |>
+  pivot_longer(-id) |>
+  
+  ggplot(aes(value)) +
+  geom_histogram(binwidth = 1) +
+  theme(panel.grid = element_blank()) +
+  facet_wrap(~name,ncol = 4)
+
+
+
+## Assemble Datasets -----
+
+#Do some setup to avoid problems with clashing function names
+d_complete =
+  left_join(d_im,
+            d_cisr_scales,
+            by = "id")|>
+  left_join(d_covars, by = "id") |>
+  
+  #Complete cases only
+  drop_na() |>
+  select(id,c(all_of(select_bloods),all_of(scales_use),all_of(covars)))
+
+#Note based on a biological psychiatry reviewer comment, we are going to include the covariates in the x matrix
+
+x = 
+  d_complete |>
+  select(all_of(select_bloods),all_of(covars)) |>
+  mutate(sex = if_else(sex == "Male",0,1),
+         bmi24 = zscore(bmi24),
+         audit_c = zscore(audit_c)) |>
+  as.matrix()
+
+y = 
+  d_complete |>
+  select(all_of(scales_use)) |>
+  as.matrix()
+
+#So we have 2311 individuals contributing complete case data 
+#dim(x)
+#dim(y)
+
+
+# Correlations ----
+
+## Infl correlation plot -------
+
+#Make a correlation plot of the F24 bloods in clusters 1 and 3 (get rid of the
+#low association cluster 2 variables)
 cor_f24 = 
-  d |>
-  select(contains("_f24")) |>
+  d_im |>
+  select(-c(id,cisr_dep)) |>
   rename_with(.cols = everything(),.fn = ~str_remove(.x,"_f24")) |>
-  dplyr::select(all_of(infl_clus |> filter(clus != 1) |> pull(infl))) |>
+  dplyr::select(all_of(select_bloods)) |>
   mutate(across(.cols = everything(),.fns = zscore)) |>
   cor(use = "pairwise.complete.obs",
       method = "pearson") 
@@ -122,94 +180,190 @@ ggsave(filename = "./Figures/f24_selected_Vars_correlation.pdf",
        width  = 10,
        plot = p_f24_cor)
 
-# PLS2 -----
+#There are a lot of correlations, mostly positive
 
-#With the implementation of PLS in mixOmics we can do everything all at once, 
-#which they call PLS2. There is also a paper that points out how CCA and PLS are 
-#very similar apart from the implementation of different regularization types
-#(L1 vs L2 I think)
-
-## Build the symptom scales ======
-
-#All subscales are scored 0-4, except depressive ideas, which ranges 0-5
-d_cisr_scales = 
-  d |> 
-  select(c(id,som:pan)) |> 
-  mutate(across(som:pan,~as.integer(.x)-1))
- 
-
-#Make plots of the scores
-d_cisr_scales |>
-  select(id,som,ftg,con,slp,irt,dep,did,wor,anx,pho,pan) |>
-  pivot_longer(-id) |>
+#Look at the correlations 
+cor_f24 |>
+  as_tibble(rownames  = "var1" ) |>
+  pivot_longer(-var1,names_to = "var2",values_to = "cor") |>
+  mutate(sc = if_else(var1 == var2,T,F)) |>
+  filter(!sc)
+select(-sc) |>
   
-  ggplot(aes(value)) +
-  geom_histogram(binwidth = 1) +
-  theme(panel.grid = element_blank()) +
-  facet_wrap(~name,ncol = 4)
+  summarise(mu = mean(cor),
+            sig = sd(cor),
+            min_c = min(cor),
+            max_c = max(cor))
+
+## Symptom correlation plot ------
+
+cor_sym = 
+  d_cisr_scales |>
+  select(-c(id)) |>
+  dplyr::select(all_of(scales_use)) |>
+  cor(use = "pairwise.complete.obs",
+      method = "spearman") 
+
+#Do our own clustering so we can save the variable names for later - I have 
+#taken this code directly from the ggcorrplot github so it should produce 
+#identical results to using the hc.ord method
+clust_cor_sym <- 
+  hclust(as.dist(1 - cor_sym),method = "complete")
+
+#Extract the ordering based on the clustering
+ord_sym <- clust_cor_sym$order
+
+#Save variable names for later
+vars_sym_ordered <- clust_cor_sym$labels[clust_cor_sym$order]
+
+#Sort the variables
+cor_sym <- cor_sym[ord_sym, ord_sym]
+
+#Now make the plot
+p_cor_sym <- 
+  cor_sym %>% 
+  ggcorrplot::ggcorrplot(method = "square",type = "full",
+                         show.diag = TRUE,
+                         #colors = scico::scico(n = 3,palette = 'roma',direction = -1),
+                         hc.order = F,
+                         tl.cex = 6) +
+  theme(panel.grid = element_blank(),
+        axis.text.x.bottom = element_text(angle = 90),
+        legend.title = element_text(size = 8),
+        legend.text = element_text(size = 6)) +
+  scico::scale_fill_scico(palette = 'vik',name = "Correlation",direction = 1,
+                          limits = c(-1,1))
+
+p_cor_sym
+
+#I think we save it at this point, although its not going into a figure
+#in the final manuscript
+ggsave(filename = "./Figures/symptom_correlation.pdf",
+       height = 8,
+       width  = 10,
+       plot = p_cor_sym)
 
 
-## Assemble Datasets -----
 
-#Do some setup to avoid problems with clashing function names
-vars_cisr = c("som","ftg","con","slp","irt","dep","did","wor","anx","pho","pan")
 
-d_complete =
-  left_join(d_im,
-            d_cisr_scales,
-            by = "id")|>
-  left_join(d_covars, by = "id") |>
+#Look at the correlations 
+cor_sym |>
+  as_tibble(rownames  = "var1" ) |>
+  pivot_longer(-var1,names_to = "var2",values_to = "cor") |>
+  mutate(sc = if_else(var1 == var2,T,F)) |>
+  filter(!sc) |>
+  select(-sc) |>
   
-  #Complete cases only
-  drop_na() |>
-  select(id,c(all_of(select_bloods),all_of(vars_cisr),all_of(covars)))
+  summarise(mu = mean(cor),
+            sig = sd(cor),
+            min_c = min(cor),
+            max_c = max(cor))
 
-#Note based on a biological psychiatry reviewer comment, we are going to include the covariates in the x matrix
-
-x = 
-  d_complete |>
-  select(all_of(select_bloods),all_of(covars)) |>
-  mutate(sex = if_else(sex == "Male",0,1),
-         bmi24 = zscore(bmi24),
-         audit_c = zscore(audit_c)) |>
-  as.matrix()
-
-y = 
-  d_complete |>
-  select(all_of(vars_cisr)) |>
-  as.matrix()
-
-#So we have 2551 individuals contributing complete case data after imputing as above
-#dim(x)
-#dim(y)
-
-## Explore dataset =====
+# PCAs =====
 
 # produce a heat map of the cross correlation matrix
 imgCor(x, y, sideColors = c("purple", "green"), color = color.jet(21, alpha = 1)) 
 
+#Correlations across datasets are lower than within
+
 #Following in the footsteps of the mixomics case study, we will
 #start with PCA.
-pca.cisr  <- pca(y,ncomp = 10,center = FALSE,scale = FALSE)
-pca.metab <- pca(x,ncomp = 10,center = FALSE,scale = FALSE)
 
-plot(pca.cisr)  # arguably 1 component 
-plot(pca.metab) # arguably 1 or 3 components
+## Immuno-metabolic variables -----
+
+nc_x = 
+  d_complete |>
+  select(all_of(select_bloods)) |>
+  parameters::n_components(type = "PCA")
+
+pca.x <- 
+  d_complete |>
+  select(all_of(select_bloods)) |>
+  as.matrix() |>
+  pca(X = _,ncomp = 10,center = FALSE,scale = FALSE)
+
+#Explained variance
+pca.x$prop_expl_var$X |> as_tibble() |> mutate(cs = cumsum(value))
+
+#Plot
+p_x <- 
+  pca.x$prop_expl_var$X |> 
+  as_tibble() |>
+  mutate(comp = 1:n(),
+         value = value * 100) |>
+  ggplot(aes(x = comp, y = value)) +
+  geom_col() +
+  theme(panel.grid = element_blank(),
+        title = element_text(size = 8),
+        axis.text = element_text(size = 6),
+        axis.title = element_text(size = 8),
+        strip.background = element_blank(),
+        strip.text = element_blank()) +
+  scale_x_continuous(breaks = seq(2,10,2)) +
+  labs(x = "Principal Component", y = "Explained Variance (%)",title = "Immuno-metabolic PCA")
+
+#Plot scores
+plotIndiv(pca.x,comp = c(1,2),
+          title = 'Immuno-Metabolic, PCA comp 1 - 2')
+
+#One big clump really
+
+## Symptom variables ------
+
+nc_y = 
+  d_complete |>
+  select(all_of(scales_use))|>
+  parameters::n_components(type = "PCA")
+
+
+#Run the PCA
+pca.y  <- pca(y,ncomp = 10,center = FALSE,scale = FALSE)
+
+p_y <- 
+  pca.y$prop_expl_var$X |> 
+  as_tibble() |>
+  mutate(comp = 1:n(),
+         value = value * 100) |>
+  ggplot(aes(x = comp, y = value)) +
+  geom_col() +
+  theme(panel.grid = element_blank(),
+        title = element_text(size = 8),
+        axis.text = element_text(size = 6),
+        axis.title = element_text(size = 8),
+        strip.background = element_blank(),
+        strip.text = element_blank()) +
+  scale_x_continuous(breaks = seq(2,10,2)) +
+  labs(x = "Principal Component", y = "Explained Variance (%)",title = "Symptom PCA")
+
+
+pca.y$prop_expl_var$X |> as_tibble() |> mutate(cs = cumsum(value))
 
 #Look at the clustering of individuals in PC subspace
 
-plotIndiv(pca.cisr,comp = c(1,2),
-          title = 'CISR, PCA comp 1 - 2')
+plotIndiv(pca.y,comp = c(1,2),
+          title = 'Symptom, PCA comp 1 - 2')
 
 #There is that slightly odd stripey clustering we see elsewhere due to the
 #variables not being continuous
 
-plotIndiv(pca.metab,comp = c(1,2),
-          title = 'Metabolic, PCA comp 1 - 2')
+## Make a plot -----
 
-#One big clump really, for both
+#Assemble 
+p_pca = 
+  ((p_f24_cor|p_cor_sym) + plot_layout(guides = "collect"))/
+  (p_x|plot_spacer()|p_y|plot_spacer()) +
+  plot_layout(heights = c(4,1)) +
+  plot_annotation(tag_levels = "A")
 
-## Basic, untuned PLS model =====
+#And save
+ggsave(filename = "./Figures/pca_plot.pdf",
+       height = 7,
+       width  = 8,
+       plot = p_pca)
+
+
+
+# Basic, untuned PLS model =====
 
 #We need to think about what mode to run pls in. Are we trying to use
 #the metabolic data to predict the cisr data, or to use the cisr data
@@ -229,14 +383,14 @@ spls.cisr <- spls(X = x, Y = y, ncomp = 5,mode = 'regression',scale = FALSE)
 
 #So this is our basic model but it needs tuning and sparsifying
 
-## Tune model ======
+# Tune model ======
 
 set.seed(06042023)
 
 #First lets select the number of components to include
 
 perf.spls.cisr <- perf(spls.cisr,validation = 'Mfold',
-                        folds = 10, nrepeat = 10)
+                       folds = 10, nrepeat = 10)
 
 #Various methods exist to compare performance at different numbers
 #of components
@@ -245,9 +399,9 @@ perf.spls.cisr <- perf(spls.cisr,validation = 'Mfold',
 plot(perf.spls.cisr,criterion = 'Q2.total')
 plot(perf.spls.cisr,criterion = 'Q2')
 
-#We are below the line for all of Q2.total. For the individual Y measures ("Q2")
+#We are below the line after 1 for all of Q2.total. For the individual Y measures ("Q2")
 #we see that above one component we get a drop below the line, this suggests
-#that one component is sufficient
+#that one or two components are sufficient
 
 #Now we ask how many variables to select
 
@@ -256,7 +410,7 @@ plot(perf.spls.cisr,criterion = 'Q2')
 #RSS gives more weights to large errors and is sensitive to outliers
 #but it does select less features on Y than the cor measure.
 
-#We are probvably more interested in rbosutness to outliers and less interests in
+#We are probably more interested in robustness to outliers and less interests in
 #deflation so lets go with cor as they do in the case study
 
 #Set a range of test values for number of variables to keep
@@ -273,20 +427,20 @@ plot(perf.spls.cisr,criterion = 'Q2')
 #have reproducibility
 set.seed(06042023)
 
-list.keepX <- c(seq(2,20,1))
-list.keepY <- c(seq(2,11,1))
+list.keepX <- c(seq(2,50,1))
+list.keepY <- c(seq(2,22,1))
 
 #Set up for parallel processing (still very slow and I'm not sure if it works)
 BPPARAM <- BiocParallel::SnowParam(workers = 15)
 
 #We are going to start with lots of components, and then see what is optimal
 tune.spls.cisr <- tune.spls(X = x, Y = y, ncomp = 2,
-                             test.keepX = list.keepX,
-                             test.keepY = list.keepY,
-                             nrepeat = 2, folds = 10,
-                             mode = 'regression',
-                             measure = 'cor',
-                             BPPARAM = BPPARAM)
+                            test.keepX = list.keepX,
+                            test.keepY = list.keepY,
+                            nrepeat = 2, folds = 10,
+                            mode = 'regression',
+                            measure = 'cor',
+                            BPPARAM = BPPARAM)
 
 
 plot(tune.spls.cisr)
@@ -303,19 +457,17 @@ optimal.keepX <- tune.spls.cisr$choice.keepX
 optimal.keepY <- tune.spls.cisr$choice.keepY
 optimal.ncomp <- length(optimal.keepX) # extract optimal number of components
 
-#It looks like the choice of variables per component is a bit more
-#sensible on the RR based method, so we go with that
 
-## Fit Final Model ======
+# Fit Final Model ======
 
 #Now we can fit the final model
 
 final.spls.cisr <- spls(X = x,
                         Y = y, 
-                         ncomp = optimal.ncomp,
-                         keepX = optimal.keepX,
-                         keepY = optimal.keepY,
-                         mode = 'regression')
+                        ncomp = optimal.ncomp,
+                        keepX = optimal.keepX,
+                        keepY = optimal.keepY,
+                        mode = 'regression')
 
 #Lets save this model given how long it takes to get all the optimised pls
 #component counts. Given, however, that the model structure contains the ALSPAC
@@ -323,18 +475,14 @@ final.spls.cisr <- spls(X = x,
 #saving it into the RDSF
 
 
-## Save final model =======
-
-# write_rds(final.spls.cisr,paste(data_dir,"cisr_pls2_model.rds",sep = '/'))
-#final.spls.cisr = read_rds(paste(data_dir,"cisr_pls2_model.rds",sep = '/'))
-
+# Save final model =======
 
 write_rds(final.spls.cisr,"./Models/cisr_pls2_model.rds")
 #final.spls.cisr = read_rds("./Models/cisr_pls2_model.rds")
 
-## Inspect final model =======
+# Inspect final model =======
 
-### Loading Plots -----
+## Loading Plots -----
 
 #Now we can interrogate this optimised model
 
@@ -349,8 +497,8 @@ final.spls.cisr$prop_expl_var |>
             cumulative_cisr  = cumsum(Y)) |>
   mutate(across(where(is.double),~round(.x*100,digits = 1))) 
 
-#So we can get up to 22.6% of the variance in the IM data and
-#74.1% of the variance in the CISR data
+#So we can get up to 22.1% of the variance in the IM data and
+#48.5% of the variance in the CISR data
 
 
 #Plot loadings our way
@@ -362,25 +510,23 @@ final.spls.cisr$prop_expl_var |>
 p_loadings_2 = 
   bind_rows(
     final.spls.cisr$loadings$X |>
-    as_tibble(rownames = "variable") |>
-    mutate(set = "infl"),
+      as_tibble(rownames = "variable") |>
+      mutate(set = "infl"),
     final.spls.cisr$loadings$Y |>
       as_tibble(rownames = "variable") |>
       mutate(set = "cisr"))    |>
-
+  
   #Do the flip on both components
   mutate(
     across(.cols = starts_with("comp"),.fns = ~-.x)) |>
-
+  
   pivot_longer(-c(set,variable)) |>
   filter(value != 0) |>
   nest_by(set,name) |>
   mutate(plot_col = case_when(name == "comp1" ~ "#1b9e77",
-                              name == "comp2" ~ "#d95f02",
-                              name == "comp3" ~ "#7570b3")) |>
+                              name == "comp2" ~ "#d95f02")) |>
   mutate(plot_title = case_when(name == "comp1" ~ "Component 1",
-                                name == "comp2" ~ "Component 2",
-                                name == "comp3" ~ "Component 3")) |>
+                                name == "comp2" ~ "Component 2")) |>
   mutate(plots = list(
     data |>
       mutate(variable = fct_reorder(variable,value,max)) |> 
@@ -390,7 +536,7 @@ p_loadings_2 =
       theme(#panel.grid = element_blank(),
         panel.grid.major.y = element_blank(),
         panel.grid.minor.y = element_blank(),
-        axis.text.x.bottom = element_text(angle = -90,vjust = 0.5,size = 6),
+        axis.text.x.bottom = element_text(angle = -90,vjust = 0.5,size = 8),
         #axis.title.x.bottom = element_text(size = 6),
         axis.title.x.bottom = element_blank(),
         axis.text.y = element_text(size = 6),
@@ -425,7 +571,7 @@ d_pls2 <-
   
   #Do the flip (sign is meaningless in PLS but for interpretation its better to have > score == > symptom)
   mutate(    across(.cols = contains("comp"),.fns = ~-.x)) |>
-
+  
   left_join(d_24 |> select(id,cisr_dep), by = "id") |>
   select(-c(eth,bmi9,bp24,cisr_dep,starts_with("smfq")))
 
@@ -440,57 +586,9 @@ d_smfq <-
             by = "id") |>
   pivot_longer(infl_comp1:cisr_comp2,names_to = "comp",values_to = "pls_score") |>
   pivot_longer(starts_with("smfq_"),values_to = "smfq_score",names_to = "smfq_wave") |>
-  nest_by(smfq_wave,comp) |>
-  mutate(m1 = 
-           list(
-             glm(smfq_score ~ pls_score,
-                 family = poisson(link = "log"),
-                data = data)
-           ),
-         mt = list(
-           avg_comparisons(model = m1,
-                           variables = list(pls_score = "sd"),
-                           type = "response",
-                           conf_level = 0.95) |>
-             as_tibble()
-         )) 
+  nest_by(smfq_wave,comp) 
 
-#Make a line plot for this - 
-p_pls2_smfq <- 
-  d_smfq|>
-  select(smfq_wave,comp,mt) |>
-  unnest(cols = mt) |>
-  ungroup() |>
-  filter(str_detect(comp,"infl_")) |>
-  mutate(comp = case_when(comp == "infl_comp1" ~ "Component 1",
-                          comp == "infl_comp2" ~ "Component 2")) |>
-  mutate(p.adj = p.adjust(p.value,method = "fdr")) |>
-  # filter(p.adj < 0.05) |>
-  mutate(p_star = case_when(p.adj  < 0.05 ~ '*',
-                            p.adj >= 0.05 ~ ' ')) |>
-  ggplot(aes(x = smfq_wave,y = estimate,ymin = conf.low,ymax = conf.high,
-             colour = comp,
-             label = p_star,
-             group = comp)) +
-  geom_line() +
-  geom_pointrange()+
-  geom_text(colour = "black",size = 6,nudge_y = 0.25) +
-  geom_hline(yintercept = 0,lty = 2) +
-  facet_wrap(~comp,ncol = 3) +
-  scale_colour_brewer(palette = "Dark2")+
-  theme(axis.text = element_text(size = 6),
-        axis.title = element_text(size = 6),
-        strip.text = element_text(size = 6),
-        legend.position = "none",
-        panel.grid = element_blank())+
-  labs(x = "SMFQ Wave",y = "Marginal Change in SMFQ \nfor 1 unit PLS Score")
-
-p_pls2_smfq
-
-#So actually our scores are associated with our future SMFQ scores,
-#particularly comp1.
-
-#Or you could do a glmm:
+#Do a glmm:
 library(lme4)
 
 d_glmm <- 
@@ -528,6 +626,57 @@ d_glmm |> select(comp,mt) |> unnest(cols = mt)
 
 #So the average (over all SMFQ waves) effect of a 1 SD in PLS component score is 0.855 SMFQ
 #points for comp 1, and 0.393 for comp 2. This varies e.g. 
+
+
+d_glmm_me <- 
+  d_glmm |> 
+  select(comp,m1) |> 
+  ungroup() |>
+  mutate(wave = c(1,5)) |> 
+  tidyr::expand(comp,wave) |> 
+  left_join(d_glmm |> 
+              ungroup() |> 
+              select(comp,m1),by = "comp") |> 
+  rowwise() |>
+  mutate(me = avg_comparisons(model = m1,
+                              variables = list(pls_score = "sd"),
+                              newdata = datagrid(smfq_wave = wave, grid_type = "counterfactual"),
+                              type = "response",
+                              re.form=NA,
+                              conf_level = 0.95)|>
+           as_tibble() |>
+           list())
+
+
+d_glmm_me |>
+  dplyr::select(comp,wave,me) |>
+  ungroup() |>
+  unnest(me) |>
+  dplyr::select(comp,wave,contrast,estimate:conf.high)
+
+#Component 1- 
+
+#At wave 1 the difference is:
+d_glmm$m1[[1]] |>
+  avg_comparisons(model = _,
+                  variables = list(pls_score = "sd"),
+                  newdata = datagrid(smfq_wave = 1, grid_type = "counterfactual"),
+                  type = "response",
+                  re.form=NA,
+                  conf_level = 0.95)|>
+  as_tibble()
+
+#Whereas at wave 5, it is
+d_glmm$m1[[1]] |>
+  avg_comparisons(model = _,
+                  variables = list(pls_score = "sd"),
+                  newdata = datagrid(smfq_wave = 5, grid_type = "counterfactual"),
+                  type = "response",
+                  re.form=NA,
+                  conf_level = 0.95)|>
+  as_tibble()
+
+#Component 2- 
 
 #At wave 1 the difference is:
 d_glmm$m1[[2]] |>
@@ -593,6 +742,53 @@ p_pls2_smfq/(p_glmm1|p_glmm2)
 
 #These results are similar, which is nice
 
+#Could you do a model with both component scores together?
+
+d_glmm_2 <- 
+  d_pls2 |>
+  select(id,contains("infl_comp"),all_of(covars)) |>
+  left_join(d |>
+              select(id,smfq_25,smfq_c1,smfq_c2,smfq_c4,smfq_c5),
+            by = "id") |>
+  pivot_longer(starts_with("smfq_"),values_to = "smfq_score",names_to = "smfq_wave") |>
+  mutate(smfq_wave = case_when(smfq_wave == "smfq_25" ~ 1,
+                               smfq_wave == "smfq_c1" ~ 2,
+                               smfq_wave == "smfq_c2" ~ 3,
+                               smfq_wave == "smfq_c4" ~ 4,
+                               smfq_wave == "smfq_c5" ~ 5)) 
+
+#This is a strange model. We don't need covariates as they are in the components
+m_2 <- 
+  glmer(smfq_score ~ 1 + infl_comp1 + infl_comp2 + smfq_wave + infl_comp1:smfq_wave + infl_comp2:smfq_wave + infl_comp1:infl_comp2 +  infl_comp1:infl_comp2:smfq_wave + + (smfq_wave|id),
+        family = poisson(link = "log"),
+      data = d_glmm_2)
+
+
+avg_comparisons(model = m_2,
+                variables = list(infl_comp1 = "sd",
+                                 infl_comp2 = "sd"),
+                type = "response",
+                re.form=NA,
+                conf_level = 0.95) |>
+  as_tibble()
+
+m_2 |>  
+  plot_comparisons(variables = list("infl_comp2" = "sd"),
+                   re.form=NA,
+                   condition = c("smfq_wave")) +
+  geom_hline(yintercept = 0,lty = 2) +
+  theme(#panel.grid = element_blank(),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    axis.text.x.bottom = element_text(angle = -90,vjust = 0.5,size = 6),
+    #axis.title.x.bottom = element_text(size = 6),
+    axis.title.x.bottom = element_blank(),
+    axis.text.y = element_text(size = 6),
+    title = element_text(size = 6),
+    axis.title = element_blank()) +
+  labs(title = "Component 1") +
+  coord_cartesian(ylim = c(0,1.6))
+
 
 ## Make Figure ======
 
@@ -613,101 +809,3 @@ ggsave(filename = "./Figures/f24_pls2_mega.pdf",
        height = 7,
        width  = 6,
        plot = p_pls2_mega)
-
-
-# Bonus: PLS Scores and depression -----
-
-d_pls_all <- 
-  bind_cols(final.spls.cisr$variates$X |>
-              as_tibble() |>
-              rename_with(~paste("infl",.,sep = "_")),
-            final.spls.cisr$variates$Y |>
-              as_tibble() |>
-              rename_with(~paste("cisr",.,sep = "_"))) |>
-  bind_cols(d_complete |> select(id) |> left_join(d_cv,by = "id")) |>
-  left_join(d_24 |> select(id,cisr_dep), by = "id") 
-
-## Plots of CISR componenets ------
-
-p_cisr_hist <- 
-  d_pls_all |>
-  mutate(cisr_dep = factor(cisr_dep)) |>
-  select(id,cisr_dep,starts_with("cisr_comp")) |>
-  pivot_longer(starts_with("cisr_comp"),names_to = "comp",values_to = "cisr_value") |>
-  ggplot(aes(cisr_value,fill = cisr_dep,colour = cisr_dep)) +
-  geom_histogram(binwidth = 1,alpha = 0.4) +
-  facet_wrap(~comp,ncol = 3)+
-  scale_color_brewer(palette = "Paired")+
-  scale_fill_brewer(palette = "Paired")+
-  labs(y = "Count",c = "PLS Score from CISR")
-
-
-p_dep_1 <- 
-  d_pls_all |>
-  mutate(cisr_dep = factor(cisr_dep)) |>
-  ggplot(aes(x = -cisr_comp1,y = cisr_comp2,colour = cisr_dep)) +
-  geom_point() +
-  geom_rug() +
-  theme(panel.grid = element_blank(),
-        axis.text.x.bottom = element_text(angle = -90,vjust = 0.5,size = 6),
-        axis.title.x.bottom = element_text(size = 6),
-        axis.text.y = element_text(size = 6),
-        axis.title.y = element_text(size = 6)) +
-  geom_smooth(method = 'gam',formula = y ~ s(x,k= 3,bs = 'ts')) +
-  scale_color_brewer(palette = "Paired") +
-  labs(x = "PLS Comp 1 from CISR (Somatic-depressive-infl)",
-       y = "PLS Comp 2 from CISR (Anxiety-Hepatic)")
-
-
-
-
-
-p_pls_cisr_comps <- 
-  (p_cisr_hist/(p_dep_1)) + 
-  plot_layout(heights = c(1,1), guides = "collect") +
-  plot_annotation(tag_levels = "A")
-
-## Do the same with the im componenets ------
-
-
-p_im_hist <- 
-  d_pls_all |>
-  mutate(cisr_dep = factor(cisr_dep)) |>
-  select(id,cisr_dep,starts_with("infl_comp")) |>
-  pivot_longer(starts_with("infl_comp"),names_to = "comp",values_to = "infl_value") |>
-  ggplot(aes(infl_value,fill = cisr_dep,colour = cisr_dep)) +
-  geom_histogram(binwidth = 1,alpha = 0.4) +
-  facet_wrap(~comp,ncol = 3)+
-  scale_color_brewer(palette = "Paired")+
-  scale_fill_brewer(palette = "Paired")+
-  labs(y = "Count",c = "PLS Score from IM")
-
-
-p_im_1 <- 
-  d_pls_all |>
-  mutate(cisr_dep = factor(cisr_dep)) |>
-  ggplot(aes(x = infl_comp1,y = infl_comp2,colour = cisr_dep)) +
-  geom_point() +
-  geom_rug() +
-  theme(panel.grid = element_blank(),
-        axis.text.x.bottom = element_text(angle = -90,vjust = 0.5,size = 6),
-        axis.title.x.bottom = element_text(size = 6),
-        axis.text.y = element_text(size = 6),
-        axis.title.y = element_text(size = 6)) +
-  geom_smooth(method = 'gam',formula = y ~ s(x,k= 3,bs = 'ts')) +
-  scale_color_brewer(palette = "Paired") +
-  labs(x = "PLS Comp 1 from INFL (Somatic-depressive-infl)",
-       y = "PLS Comp 2 from INFL (Anxiety-Hepatic)")
-
-
-p_pls <- 
-  (p_cisr_hist/(p_dep_1)/p_im_hist/(p_im_1)) + 
-  plot_layout(heights = c(1,1,1,1), guides = "collect") +
-  plot_annotation(tag_levels = "A")
-
-ggsave(filename = "./Figures/f24_pls2_dep_plots.pdf",
-       height = 10,
-       width  = 9,
-       plot = p_pls)
-
-#Not really sure what this means, except that depression is complicated
